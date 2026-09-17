@@ -6,118 +6,313 @@ on:
 jobs:
   build-apk:
     runs-on: ubuntu-22.04
+    timeout-minutes: 45
 
     steps:
+
+      # =========================================================
+      # 1. PROJET
+      # =========================================================
+
       - name: Télécharger le projet
         uses: actions/checkout@v4
 
-      - name: Installer Java
+
+      # =========================================================
+      # 2. JAVA
+      # =========================================================
+
+      - name: Installer Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
 
-      - name: Installer Python
+
+      # =========================================================
+      # 3. PYTHON
+      # =========================================================
+
+      - name: Installer Python 3.11
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      - name: Installer les dépendances Linux p4a
+
+      # =========================================================
+      # 4. DEPENDANCES LINUX POUR P4A
+      # =========================================================
+
+      - name: Installer les dépendances de compilation
         run: |
           sudo apt-get update
+
           sudo apt-get install -y \
+            ant \
             autoconf \
             automake \
             autopoint \
-            libtool \
-            libltdl-dev \
-            libffi-dev \
-            libssl-dev \
-            pkg-config \
+            ccache \
             cmake \
-            ninja-build \
-            make \
-            gcc \
             g++ \
+            gcc \
             git \
-            patch \
-            unzip \
-            zip \
-            wget \
             lbzip2 \
-            ccache
+            libffi-dev \
+            libltdl-dev \
+            libssl-dev \
+            libtool \
+            make \
+            patch \
+            pkg-config \
+            unzip \
+            wget \
+            zip
 
-      - name: Configurer Android SDK
+
+      # =========================================================
+      # 5. DETECTION DU SDK ANDROID
+      # =========================================================
+
+      - name: Détecter Android SDK
+        shell: bash
         run: |
-          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
-          echo "ANDROID_HOME=$ANDROID_HOME"
+          set -e
 
-          test -d "$ANDROID_SDK_ROOT"
+          echo "Recherche du SDK Android..."
 
-          echo "$ANDROID_SDK_ROOT/platform-tools" >> "$GITHUB_PATH"
-          echo "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
+          if [ -d "$ANDROID_SDK_ROOT" ]; then
+            SDK="$ANDROID_SDK_ROOT"
+          elif [ -d "$ANDROID_HOME" ]; then
+            SDK="$ANDROID_HOME"
+          elif [ -d "/usr/local/lib/android/sdk" ]; then
+            SDK="/usr/local/lib/android/sdk"
+          else
+            echo "ERREUR : Android SDK introuvable."
+            exit 1
+          fi
 
-      - name: Détecter le NDK
-        run: |
-          SDK="$ANDROID_SDK_ROOT"
+          echo "SDK détecté : $SDK"
 
-          echo "NDK disponibles :"
-          find "$SDK/ndk" -mindepth 1 -maxdepth 1 -type d | sort -V
-
-          NDK=$(find "$SDK/ndk" \
-            -mindepth 1 \
-            -maxdepth 1 \
-            -type d \
-            -name "28.*" \
-            | sort -V \
-            | tail -n 1)
-
-          test -n "$NDK"
-          test -d "$NDK"
-
-          echo "NDK sélectionné : $NDK"
+          test -d "$SDK"
 
           echo "ANDROIDSDK=$SDK" >> "$GITHUB_ENV"
           echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
+
+          echo "$SDK/platform-tools" >> "$GITHUB_PATH"
+          echo "$SDK/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
+
+
+      # =========================================================
+      # 6. VERIFICATION API 35
+      # =========================================================
+
+      - name: Vérifier Android API 35
+        shell: bash
+        run: |
+          set -e
+
+          echo "Vérification Android API 35..."
+
+          test -d "$ANDROIDSDK/platforms/android-35"
+
+          echo "Android API 35 : OK"
+
+
+      # =========================================================
+      # 7. DETECTION BUILD TOOLS
+      # =========================================================
+
+      - name: Détecter Build Tools
+        shell: bash
+        run: |
+          set -e
+
+          echo "Build Tools disponibles :"
+
+          ls -1 "$ANDROIDSDK/build-tools"
+
+          BUILD_TOOLS=$(find "$ANDROIDSDK/build-tools" \
+            -mindepth 1 \
+            -maxdepth 1 \
+            -type d \
+            -name "35.*" \
+            | sort -V \
+            | tail -n 1)
+
+          if [ -z "$BUILD_TOOLS" ]; then
+            echo "ERREUR : Build Tools 35 introuvables."
+            exit 1
+          fi
+
+          echo "Build Tools sélectionnés : $BUILD_TOOLS"
+
+          echo "BUILD_TOOLS=$BUILD_TOOLS" >> "$GITHUB_ENV"
+          echo "$BUILD_TOOLS" >> "$GITHUB_PATH"
+
+
+      # =========================================================
+      # 8. DETECTION NDK r28c
+      # =========================================================
+
+      - name: Détecter NDK r28c
+        shell: bash
+        run: |
+          set -e
+
+          echo "NDK disponibles :"
+
+          find "$ANDROIDSDK/ndk" \
+            -mindepth 1 \
+            -maxdepth 1 \
+            -type d \
+            | sort -V || true
+
+          NDK=$(find "$ANDROIDSDK/ndk" \
+            -mindepth 1 \
+            -maxdepth 1 \
+            -type d \
+            -name "28.2.*" \
+            | sort -V \
+            | tail -n 1)
+
+          if [ -z "$NDK" ]; then
+            echo "ERREUR : NDK r28c introuvable."
+            exit 1
+          fi
+
+          echo "NDK sélectionné : $NDK"
+
+          test -f "$NDK/source.properties"
+
+          echo "Version NDK :"
+          grep "Pkg.Revision" "$NDK/source.properties"
+
           echo "ANDROIDNDK=$NDK" >> "$GITHUB_ENV"
           echo "ANDROID_NDK_HOME=$NDK" >> "$GITHUB_ENV"
           echo "ANDROID_NDK_ROOT=$NDK" >> "$GITHUB_ENV"
 
-      - name: Vérifier la chaîne de compilation
+
+      # =========================================================
+      # 9. VERIFICATION COMPLETE
+      # =========================================================
+
+      - name: Vérification complète de la chaîne Android
+        shell: bash
         run: |
-          echo "===== JAVA ====="
+          set -e
+
+          echo "======================================"
+          echo "        BN-FOOTBALL BUILD CHECK"
+          echo "======================================"
+
+          echo ""
+          echo "JAVA"
           java -version
 
-          echo "===== PYTHON ====="
+          echo ""
+          echo "PYTHON"
           python --version
 
-          echo "===== AUTOCONF ====="
+          echo ""
+          echo "PIP"
+          pip --version
+
+          echo ""
+          echo "AUTOCONF"
           autoconf --version | head -n 1
 
-          echo "===== LIBTOOL ====="
+          echo ""
+          echo "AUTOMAKE"
+          automake --version | head -n 1
+
+          echo ""
+          echo "LIBTOOL"
           libtool --version | head -n 1
 
-          echo "===== CMAKE ====="
+          echo ""
+          echo "CMAKE"
           cmake --version | head -n 1
 
-          echo "===== SDK ====="
+          echo ""
+          echo "NINJA"
+          ninja --version
+
+          echo ""
+          echo "ANDROID SDK"
+          echo "$ANDROIDSDK"
+
+          echo ""
+          echo "ANDROID API"
           test -d "$ANDROIDSDK/platforms/android-35"
+          echo "API 35 OK"
 
-          echo "===== BUILD TOOLS ====="
-          test -d "$ANDROIDSDK/build-tools/35.0.0"
+          echo ""
+          echo "BUILD TOOLS"
+          echo "$BUILD_TOOLS"
 
-          echo "===== NDK ====="
-          test -d "$ANDROIDNDK"
+          echo ""
+          echo "ANDROID NDK"
+          echo "$ANDROIDNDK"
 
-          echo "CONFIGURATION ANDROID OK"
+          echo ""
+          echo "NDK VERSION"
+          grep "Pkg.Revision" "$ANDROIDNDK/source.properties"
 
-      - name: Installer Python-for-Android
+          echo ""
+          echo "======================================"
+          echo "TOUS LES COMPOSANTS SONT PRESENTS"
+          echo "======================================"
+
+
+      # =========================================================
+      # 10. P4A
+      # =========================================================
+
+      - name: Installer python-for-android
         run: |
           python -m pip install --upgrade pip setuptools wheel
-          python -m pip install python-for-android==2026.05.09
+
+          python -m pip install \
+            python-for-android==2026.05.09
+
+          p4a --version
+
+
+      # =========================================================
+      # 11. VERIFICATION DU PROJET
+      # =========================================================
+
+      - name: Vérifier BN-Football
+        shell: bash
+        run: |
+          set -e
+
+          test -f main.py
+
+          echo "main.py : OK"
+
+          test -d football
+
+          echo "football/ : OK"
+
+          test -d core
+
+          echo "core/ : OK"
+
+          echo "Projet BN-Football prêt."
+
+
+      # =========================================================
+      # 12. CONSTRUCTION APK
+      # =========================================================
 
       - name: Construire BN-Football APK
+        shell: bash
         run: |
+          set -e
+
           p4a apk \
             --private "$GITHUB_WORKSPACE" \
             --package=com.bndigital.football \
@@ -133,21 +328,48 @@ jobs:
             --orientation=landscape \
             --debug
 
-      - name: Vérifier et préparer APK
+
+      # =========================================================
+      # 13. RECHERCHE APK
+      # =========================================================
+
+      - name: Trouver APK
+        shell: bash
         run: |
+          set -e
+
           mkdir -p output
 
-          echo "Recherche de l'APK..."
-          find . -type f -name "*.apk" -print
+          echo "Recherche de tous les APK..."
 
-          APK=$(find . -type f -name "*.apk" | head -n 1)
+          find . \
+            -type f \
+            -name "*.apk" \
+            -print
 
-          test -n "$APK"
+          APK=$(find . \
+            -type f \
+            -name "*.apk" \
+            | head -n 1)
+
+          if [ -z "$APK" ]; then
+            echo "ERREUR : aucun APK généré."
+            exit 1
+          fi
+
+          echo "APK trouvé : $APK"
 
           cp "$APK" output/BN-Football.apk
 
+          echo ""
           echo "APK FINAL :"
+
           ls -lh output/BN-Football.apk
+
+
+      # =========================================================
+      # 14. PUBLIER APK
+      # =========================================================
 
       - name: Publier BN-Football APK
         uses: actions/upload-artifact@v4
