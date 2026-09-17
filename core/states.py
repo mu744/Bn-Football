@@ -1,0 +1,8 @@
+MENU = "menu"
+TEAM_SELECTION = "team_selection"
+MATCH = "match"
+CHAMPIONSHIP = "championship"
+CALENDAR = "calendar"
+STANDINGS = "standings"
+SQUAD = "squad"
+SETTINGS = "settings"

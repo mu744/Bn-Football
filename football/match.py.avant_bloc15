@@ -1,0 +1,1714 @@
+import math
+import pygame
+
+from football.player import Player
+from football.ai import FootballAI
+from football.tactics import get_positions
+from football.team import Team
+from football.defense import DefenseController
+from football.goalkeeper import GoalkeeperController
+
+from football.gameplay.control_system import ControlSystem
+from football.gameplay.pass_system import PassSystem
+from football.gameplay.shoot_system import ShootSystem
+from football.gameplay.dribble_system import DribbleSystem
+from football.gameplay.tackle_system import TackleSystem
+from football.gameplay.stamina_system import StaminaSystem
+from football.gameplay.player_controller import PlayerController
+from football.gameplay.power_system import PowerSystem
+from football.gameplay.ball_physics import BallPhysics
+
+from football.system_registry import SystemRegistry
+from football.match_controller import MatchController
+from football.match_context import MatchContext
+
+
+class Match:
+
+    def __init__(self, game):
+
+        self.game = game
+
+        # ==================================================
+        # TERRAIN
+        # ==================================================
+
+        self.field = pygame.Rect(
+            70,
+            70,
+            760,
+            460
+        )
+
+        # ==================================================
+        # EQUIPES
+        # ==================================================
+
+        home_id = self.game.save.get(
+            "team_id",
+            "bnu"
+        )
+
+        opponent_id = "ouaga"
+
+        if opponent_id == home_id:
+            opponent_id = "sahel"
+
+        self.home_team = Team(home_id)
+        self.away_team = Team(opponent_id)
+
+        self.home_players = []
+        self.away_players = []
+
+        # ==================================================
+        # BALLON
+        # ==================================================
+
+        self.ball_x = float(self.field.centerx)
+        self.ball_y = float(self.field.centery)
+
+        self.ball_vx = 0.0
+        self.ball_vy = 0.0
+
+        self.ball_owner = None
+
+        # ==================================================
+        # SCORE
+        # ==================================================
+
+        self.home_score = 0
+        self.away_score = 0
+
+        # ==================================================
+        # TEMPS
+        # ==================================================
+
+        self.match_time = 0.0
+        self.match_duration = 90.0
+
+        # ==================================================
+        # GARDIENS
+        # ==================================================
+
+        self.goalkeepers = []
+
+        # ==================================================
+        # JOUEURS
+        # ==================================================
+
+        self.create_players()
+
+        # ==================================================
+        # DIFFICULTE
+        # ==================================================
+
+        difficulty = self.game.save.get(
+            "difficulty",
+            "normal"
+        )
+
+        self.difficulty = difficulty
+
+        # ==================================================
+        # IA INDIVIDUELLE
+        # ==================================================
+
+        self.ai = FootballAI(
+            self,
+            difficulty
+        )
+
+        self.football_ai = self.ai
+
+        self.ai_controlled_player = None
+
+        # ==================================================
+        # GAMEPLAY DE BASE
+        # ==================================================
+
+        self.control_system = ControlSystem(self)
+
+        self.pass_system = PassSystem(self)
+
+        self.shoot_system = ShootSystem(self)
+
+        self.dribble_system = DribbleSystem(self)
+
+        self.tackle_system = TackleSystem(self)
+
+        self.stamina_system = StaminaSystem(self)
+
+        self.player_controller = PlayerController(self)
+
+        self.defense = DefenseController(self)
+
+        self.power_system = PowerSystem()
+
+        self.ball_physics = BallPhysics(self)
+
+        # ==================================================
+        # ETAT DES ACTIONS
+        # ==================================================
+
+        self.charging_action = None
+        self.charging_pass_type = "normal"
+
+        self.selected_index = 0
+
+        self.previous_action_keys = set()
+
+        # ==================================================
+        # REGISTRE CENTRAL
+        # ==================================================
+
+        self.system_registry = SystemRegistry(self)
+
+        self.system_registry.initialize()
+
+        # ==================================================
+        # CONTEXTE
+        # ==================================================
+
+        self.context = MatchContext(self)
+
+        # ==================================================
+        # CONTROLEUR CENTRAL
+        # ==================================================
+
+        self.match_controller = MatchController(self)
+
+        # ==================================================
+        # INITIALISATION
+        # ==================================================
+
+        self.reset_positions()
+
+    # ======================================================
+    # CREATION DES JOUEURS
+    # ======================================================
+
+    def create_players(self):
+
+        self.home_players.clear()
+        self.away_players.clear()
+        self.goalkeepers.clear()
+
+        home_positions = get_positions(
+            self.home_team.formation,
+            self.field
+        )
+
+        away_positions = get_positions(
+            self.away_team.formation,
+            self.field
+        )
+
+        # --------------------------------------------------
+        # JOUEURS DOMICILE
+        # --------------------------------------------------
+
+        for i in range(11):
+
+            hx, hy = home_positions[i]
+
+            player = Player(
+                hx,
+                hy,
+                "blue",
+                i + 1
+            )
+
+            if i < len(self.home_team.players):
+
+                data = self.home_team.players[i]
+
+                player.rating = data["rating"]
+                player.position = data["position"]
+
+                player.control_rating = (
+                    data["stats"].get(
+                        "passing",
+                        75
+                    )
+                )
+
+                player.heading_rating = (
+                    data["stats"].get(
+                        "physical",
+                        75
+                    )
+                )
+
+                player.volley_rating = (
+                    data["stats"].get(
+                        "shooting",
+                        70
+                    )
+                )
+
+            else:
+
+                player.position = "MC"
+
+            player.on_pitch = True
+
+            self.home_players.append(player)
+
+        # --------------------------------------------------
+        # JOUEURS EXTERIEURS
+        # --------------------------------------------------
+
+        for i in range(11):
+
+            ax, ay = away_positions[i]
+
+            mirrored_x = (
+                self.field.left +
+                self.field.right -
+                ax
+            )
+
+            player = Player(
+                mirrored_x,
+                ay,
+                "red",
+                i + 1
+            )
+
+            if i < len(self.away_team.players):
+
+                data = self.away_team.players[i]
+
+                player.rating = data["rating"]
+                player.position = data["position"]
+
+                player.control_rating = (
+                    data["stats"].get(
+                        "passing",
+                        75
+                    )
+                )
+
+                player.heading_rating = (
+                    data["stats"].get(
+                        "physical",
+                        75
+                    )
+                )
+
+                player.volley_rating = (
+                    data["stats"].get(
+                        "shooting",
+                        70
+                    )
+                )
+
+            else:
+
+                player.position = "MC"
+
+            player.on_pitch = True
+
+            self.away_players.append(player)
+
+        # --------------------------------------------------
+        # GARDIENS
+        # --------------------------------------------------
+
+        if self.home_players:
+
+            self.home_players[0].position = "GK"
+            self.home_players[0].role = "GK"
+
+            self.goalkeepers.append(
+                GoalkeeperController(
+                    self.home_players[0],
+                    self
+                )
+            )
+
+        if self.away_players:
+
+            self.away_players[0].position = "GK"
+            self.away_players[0].role = "GK"
+
+            self.goalkeepers.append(
+                GoalkeeperController(
+                    self.away_players[0],
+                    self
+                )
+            )
+
+    # ======================================================
+    # RESET DES POSITIONS
+    # ======================================================
+
+    def reset_positions(self):
+
+        home_positions = get_positions(
+            self.home_team.formation,
+            self.field
+        )
+
+        away_positions = get_positions(
+            self.away_team.formation,
+            self.field
+        )
+
+        for i, player in enumerate(
+            self.home_players
+        ):
+
+            if i >= len(home_positions):
+                continue
+
+            player.x, player.y = (
+                home_positions[i]
+            )
+
+            player.stop()
+            player.stamina = 100.0
+
+            player.on_pitch = True
+
+        for i, player in enumerate(
+            self.away_players
+        ):
+
+            if i >= len(away_positions):
+                continue
+
+            x, y = away_positions[i]
+
+            player.x = (
+                self.field.left +
+                self.field.right -
+                x
+            )
+
+            player.y = y
+
+            player.stop()
+            player.stamina = 100.0
+
+            player.on_pitch = True
+
+        self.ball_x = float(
+            self.field.centerx
+        )
+
+        self.ball_y = float(
+            self.field.centery
+        )
+
+        self.ball_vx = 0.0
+        self.ball_vy = 0.0
+
+        self.ball_owner = None
+
+        self.ai_controlled_player = None
+
+        self.cancel_power_action()
+
+        self.ball_physics.reset()
+
+        for goalkeeper in self.goalkeepers:
+
+            goalkeeper.home_x = (
+                goalkeeper.player.x
+            )
+
+            goalkeeper.home_y = (
+                goalkeeper.player.y
+            )
+
+            if hasattr(
+                goalkeeper,
+                "save_cooldown"
+            ):
+                goalkeeper.save_cooldown = 0.0
+
+            if hasattr(
+                goalkeeper,
+                "cooldown"
+            ):
+                goalkeeper.cooldown = 0.0
+
+            goalkeeper.reset()
+
+    # ======================================================
+    # SELECTION
+    # ======================================================
+
+    def select_nearest_player(self):
+
+        if not self.home_players:
+            return
+
+        best_index = 0
+        best_distance = float("inf")
+
+        for i, player in enumerate(
+            self.home_players
+        ):
+
+            if not getattr(
+                player,
+                "on_pitch",
+                True
+            ):
+                continue
+
+            distance = player.distance_to(
+                self.ball_x,
+                self.ball_y
+            )
+
+            if distance < best_distance:
+
+                best_distance = distance
+                best_index = i
+
+        self.selected_index = best_index
+
+    def get_selected_player(self):
+
+        if not self.home_players:
+            return None
+
+        if self.selected_index >= len(
+            self.home_players
+        ):
+
+            self.selected_index = 0
+
+        return self.home_players[
+            self.selected_index
+        ]
+
+    def next_player(self):
+
+        if not self.home_players:
+            return
+
+        self.selected_index = (
+            self.selected_index + 1
+        ) % len(self.home_players)
+
+    # ======================================================
+    # CONTROLE BALLON
+    # ======================================================
+
+    def control_ball(self, player):
+
+        if player is None:
+            return
+
+        self.control_system.take_ball(
+            player
+        )
+
+    # ======================================================
+    # PASSES
+    # ======================================================
+
+    def pass_ball(self, power=None):
+
+        player = self.get_selected_player()
+
+        if player is None:
+            return False
+
+        return self.pass_system.normal_pass(
+            player,
+            power
+        )
+
+    def short_pass(self, power=None):
+
+        player = self.get_selected_player()
+
+        if player is None:
+            return False
+
+        return self.pass_system.short_pass(
+            player,
+            power
+        )
+
+    def long_pass(self, power=None):
+
+        player = self.get_selected_player()
+
+        if player is None:
+            return False
+
+        return self.pass_system.long_pass(
+            player,
+            power
+        )
+
+    # ======================================================
+    # PASSE EN PROFONDEUR
+    # ======================================================
+
+    def through_ball(self, target=None):
+
+        player = self.get_selected_player()
+
+        if player is None:
+            return False
+
+        system = self.context.get(
+            "gameplay"
+        )
+
+        if system is None:
+            return False
+
+        if target is None:
+
+            target = (
+                self.context
+                .get("space")
+            )
+
+            if target is None:
+                return False
+
+        return system.pass_through(
+            player,
+            target
+        )
+
+    # ======================================================
+    # TIRS
+    # ======================================================
+
+    def shoot(self, power=None):
+
+        player = self.get_selected_player()
+
+        if player is None:
+            return False
+
+        return self.shoot_system.normal_shot(
+            player,
+            power
+        )
+
+    def strong_shot(self, power=None):
+
+        player = self.get_selected_player()
+
+        if player is None:
+            return False
+
+        return self.shoot_system.strong_shot(
+            player,
+            power
+        )
+
+    # ======================================================
+    # DRIBBLE
+    # ======================================================
+
+    def protect_ball(self):
+
+        player = self.get_selected_player()
+
+        if player is None:
+            return False
+
+        return self.dribble_system.protect_ball(
+            player
+        )
+
+    # ======================================================
+    # DEFENSE
+    # ======================================================
+
+    def tackle(self):
+
+        player = self.get_selected_player()
+
+        if player is None:
+            return False
+
+        return self.tackle_system.tackle(
+            player
+        )
+
+    def intercept(self):
+
+        player = self.get_selected_player()
+
+        if player is None:
+            return False
+
+        return self.tackle_system.intercept(
+            player
+        )
+
+    # ======================================================
+    # DEPLACEMENT
+    # ======================================================
+
+    def move_selected_player(
+        self,
+        dx,
+        dy,
+        sprint=False
+    ):
+
+        player = self.get_selected_player()
+
+        if player is None:
+            return
+
+        player.move(
+            dx,
+            dy,
+            self.field,
+            sprint=sprint
+        )
+
+        if self.ball_owner is None:
+
+            self.control_system.take_ball(
+                player
+            )
+
+    # ======================================================
+    # CHARGE DE PUISSANCE
+    # ======================================================
+
+    def start_power_action(
+        self,
+        action,
+        pass_type="normal"
+    ):
+
+        player = self.get_selected_player()
+
+        if player is None:
+            return False
+
+        if self.ball_owner is not player:
+            return False
+
+        if self.charging_action is not None:
+            return False
+
+        if not self.power_system.start(action):
+            return False
+
+        self.charging_action = action
+        self.charging_pass_type = pass_type
+
+        return True
+
+    # ======================================================
+    # ANNULATION
+    # ======================================================
+
+    def cancel_power_action(self):
+
+        self.power_system.cancel()
+
+        self.charging_action = None
+        self.charging_pass_type = "normal"
+
+    # ======================================================
+    # LIBERATION PUISSANCE
+    # ======================================================
+
+    def release_power_action(self):
+
+        if self.charging_action is None:
+            return
+
+        action, power = (
+            self.power_system.release()
+        )
+
+        self.charging_action = None
+
+        if action is None:
+            return
+
+        if action == "pass":
+
+            if self.charging_pass_type == "short":
+
+                self.short_pass(power)
+
+            elif self.charging_pass_type == "long":
+
+                self.long_pass(power)
+
+            else:
+
+                self.pass_ball(power)
+
+        elif action == "shoot":
+
+            if self.charging_pass_type == "strong":
+
+                self.strong_shot(power)
+
+            else:
+
+                self.shoot(power)
+
+        self.charging_pass_type = "normal"
+
+    # ======================================================
+    # INPUT
+    # ======================================================
+
+    def handle_gameplay_input(self):
+
+        keys = pygame.key.get_pressed()
+
+        dx = 0.0
+        dy = 0.0
+
+        if (
+            keys[pygame.K_LEFT]
+            or keys[pygame.K_a]
+        ):
+            dx -= 1
+
+        if (
+            keys[pygame.K_RIGHT]
+            or keys[pygame.K_d]
+        ):
+            dx += 1
+
+        if (
+            keys[pygame.K_UP]
+            or keys[pygame.K_w]
+        ):
+            dy -= 1
+
+        if (
+            keys[pygame.K_DOWN]
+            or keys[pygame.K_s]
+        ):
+            dy += 1
+
+        sprint = (
+            keys[pygame.K_LSHIFT]
+            or keys[pygame.K_RSHIFT]
+        )
+
+        self.player_controller.set_direction(
+            dx,
+            dy
+        )
+
+        self.player_controller.set_sprint(
+            sprint
+        )
+
+        self.player_controller.update()
+
+        action_keys = {
+            pygame.K_p,
+            pygame.K_o,
+            pygame.K_l,
+            pygame.K_SPACE,
+            pygame.K_e,
+            pygame.K_t,
+            pygame.K_i,
+            pygame.K_TAB
+        }
+
+        current_action_keys = set()
+
+        for key in action_keys:
+
+            if keys[key]:
+                current_action_keys.add(key)
+
+        pressed = (
+            current_action_keys -
+            self.previous_action_keys
+        )
+
+        released = (
+            self.previous_action_keys -
+            current_action_keys
+        )
+
+        if pygame.K_p in pressed:
+
+            self.start_power_action(
+                "pass",
+                "normal"
+            )
+
+        if pygame.K_o in pressed:
+
+            self.start_power_action(
+                "pass",
+                "short"
+            )
+
+        if pygame.K_l in pressed:
+
+            self.start_power_action(
+                "pass",
+                "long"
+            )
+
+        if pygame.K_SPACE in pressed:
+
+            self.start_power_action(
+                "shoot",
+                "normal"
+            )
+
+        if pygame.K_e in pressed:
+
+            self.start_power_action(
+                "shoot",
+                "strong"
+            )
+
+        if released:
+
+            self.release_power_action()
+
+        if pygame.K_t in pressed:
+            self.tackle()
+
+        if pygame.K_i in pressed:
+            self.intercept()
+
+        if pygame.K_TAB in pressed:
+            self.next_player()
+
+        if keys[pygame.K_q]:
+            self.protect_ball()
+
+        self.previous_action_keys = (
+            current_action_keys
+        )
+
+    # ======================================================
+    # IA — SELECTION
+    # ======================================================
+
+    def ai_choose_player(self):
+
+        players = [
+            p for p in self.away_players
+            if getattr(
+                p,
+                "on_pitch",
+                True
+            )
+        ]
+
+        player = self.ai.nearest_player(
+            players,
+            self.ball_x,
+            self.ball_y
+        )
+
+        if player is not None:
+
+            self.ai_controlled_player = player
+
+    # ======================================================
+    # IA — UPDATE
+    # ======================================================
+
+    def update_ai(self, delta_time):
+
+        if self.ai_controlled_player is None:
+
+            self.ai_choose_player()
+
+        if self.ai.can_react(
+            delta_time
+        ):
+
+            self.ai_choose_player()
+
+        player = self.ai_controlled_player
+
+        if player is None:
+            return
+
+        # ----------------------------------------------
+        # BALLON LIBRE
+        # ----------------------------------------------
+
+        if self.ball_owner is None:
+
+            if self.ai.should_intercept(
+                player,
+                self.ai.distance(
+                    player,
+                    self.ball_x,
+                    self.ball_y
+                )
+            ):
+
+                if self.tackle_system.intercept(
+                    player
+                ):
+                    return
+
+            self.ai.chase_ball(
+                player
+            )
+
+            return
+
+        # ----------------------------------------------
+        # IA EN POSSESSION
+        # ----------------------------------------------
+
+        if self.ball_owner.team == "red":
+
+            self.ai_attack()
+
+            return
+
+        # ----------------------------------------------
+        # IA DEFEND
+        # ----------------------------------------------
+
+        if self.ai.should_press():
+
+            self.ai.chase_ball(
+                player
+            )
+
+            if player.distance_to(
+                self.ball_x,
+                self.ball_y
+            ) <= 42:
+
+                self.tackle_system.tackle(
+                    player
+                )
+
+    # ======================================================
+    # IA ATTAQUE
+    # ======================================================
+
+    def ai_attack(self):
+
+        owner = self.ball_owner
+
+        if owner is None:
+            return
+
+        goal_x = self.field.left
+        goal_y = self.field.centery
+
+        distance = math.sqrt(
+            (goal_x - owner.x) ** 2 +
+            (goal_y - owner.y) ** 2
+        )
+
+        if self.ai.should_shoot(
+            owner,
+            distance
+        ):
+
+            if distance > 0:
+
+                speed = 11.0
+
+                self.ball_physics.kick(
+                    (goal_x - owner.x) / distance,
+                    (goal_y - owner.y) / distance,
+                    speed
+                )
+
+                self.ball_owner = None
+
+                return
+
+        target = self.ai.choose_pass_target(
+            owner,
+            self.away_players
+        )
+
+        if target is not None:
+
+            dx = target.x - owner.x
+            dy = target.y - owner.y
+
+            distance = math.sqrt(
+                dx * dx +
+                dy * dy
+            )
+
+            if distance > 0:
+
+                speed = 7.5
+
+                self.ball_physics.kick(
+                    dx / distance,
+                    dy / distance,
+                    speed
+                )
+
+                self.ball_owner = None
+
+                return
+
+        direction = -1
+
+        owner.x += (
+            owner.speed *
+            self.ai.get_chase_speed() *
+            0.35 *
+            direction
+        )
+
+        owner.x = max(
+            self.field.left +
+            owner.radius,
+
+            min(
+                self.field.right -
+                owner.radius,
+                owner.x
+            )
+        )
+
+    # ======================================================
+    # GARDIENS
+    # ======================================================
+
+    def update_goalkeepers(
+        self,
+        delta_time
+    ):
+
+        for goalkeeper in self.goalkeepers:
+
+            goalkeeper.update(
+                delta_time
+            )
+
+    # ======================================================
+    # BALLON
+    # ======================================================
+
+    def update_ball(self):
+
+        if self.ball_owner is not None:
+
+            self.control_system.update()
+
+            self.dribble_system.update(
+                self.ball_owner
+            )
+
+            return
+
+        self.ball_physics.update()
+
+        # --------------------------------------------------
+        # BUT DOMICILE
+        # --------------------------------------------------
+
+        if self.ball_x > self.field.right:
+
+            if abs(
+                self.ball_y -
+                self.field.centery
+            ) < 70:
+
+                self.home_score += 1
+
+                self.reset_positions()
+
+                return
+
+        # --------------------------------------------------
+        # BUT EXTERIEUR
+        # --------------------------------------------------
+
+        if self.ball_x < self.field.left:
+
+            if abs(
+                self.ball_y -
+                self.field.centery
+            ) < 70:
+
+                self.away_score += 1
+
+                self.reset_positions()
+
+                return
+
+        self.ball_x = max(
+            self.field.left - 30,
+            min(
+                self.field.right + 30,
+                self.ball_x
+            )
+        )
+
+    # ======================================================
+    # POSSESSION
+    # ======================================================
+
+    def update_possession(self):
+
+        if self.ball_owner is not None:
+            return
+
+        self.control_system.check_recovery()
+
+    # ======================================================
+    # UPDATE GLOBAL
+    # ======================================================
+
+    def update(self):
+
+        delta_time = (
+            self.game.clock.get_time()
+            / 1000.0
+        )
+
+        if delta_time <= 0:
+            delta_time = 0.016
+
+        self.match_time += delta_time
+
+        # --------------------------------------------------
+        # INPUT HUMAIN
+        # --------------------------------------------------
+
+        self.handle_gameplay_input()
+
+        # --------------------------------------------------
+        # PUISSANCE
+        # --------------------------------------------------
+
+        if self.charging_action is not None:
+
+            self.power_system.update()
+
+        # --------------------------------------------------
+        # CONTROLEUR CENTRAL
+        # --------------------------------------------------
+
+        self.match_controller.update(
+            delta_time
+        )
+
+        # --------------------------------------------------
+        # DEFENSE DE BASE
+        # --------------------------------------------------
+
+        self.defense.update(
+            delta_time
+        )
+
+        self.tackle_system.update(
+            delta_time
+        )
+
+        # --------------------------------------------------
+        # ENDURANCE
+        # --------------------------------------------------
+
+        self.stamina_system.update(
+            delta_time
+        )
+
+        # --------------------------------------------------
+        # IA INDIVIDUELLE
+        # --------------------------------------------------
+
+        self.update_ai(
+            delta_time
+        )
+
+        # --------------------------------------------------
+        # GARDIENS
+        # --------------------------------------------------
+
+        self.update_goalkeepers(
+            delta_time
+        )
+
+        # --------------------------------------------------
+        # BALLON
+        # --------------------------------------------------
+
+        self.update_ball()
+
+        # --------------------------------------------------
+        # POSSESSION
+        # --------------------------------------------------
+
+        self.update_possession()
+
+    # ======================================================
+    # OUTILS
+    # ======================================================
+
+    def set_difficulty(self, difficulty):
+
+        self.difficulty = difficulty
+
+        self.ai.set_difficulty(
+            difficulty
+        )
+
+        self.game.save[
+            "difficulty"
+        ] = difficulty
+
+    def get_difficulty(self):
+        return self.difficulty
+
+    def get_score(self):
+        return (
+            self.home_score,
+            self.away_score
+        )
+
+    def get_match_time(self):
+        return self.match_time
+
+    def get_exact_minute(self):
+
+        # 1 seconde réelle ≈ 1 minute de match
+        minute = int(
+            self.match_time
+        )
+
+        return min(
+            minute,
+            int(self.match_duration)
+        )
+
+    # ======================================================
+    # AFFICHAGE GARDIEN
+    # ======================================================
+
+    def draw_goalkeeper(
+        self,
+        screen,
+        player
+    ):
+
+        if player.team == "blue":
+
+            color = (
+                20,
+                220,
+                220
+            )
+
+        else:
+
+            color = (
+                255,
+                170,
+                40
+            )
+
+        pygame.draw.circle(
+            screen,
+            color,
+            (
+                int(player.x),
+                int(player.y)
+            ),
+            player.radius + 2
+        )
+
+        pygame.draw.circle(
+            screen,
+            (245, 245, 245),
+            (
+                int(player.x),
+                int(player.y)
+            ),
+            5
+        )
+
+        pygame.draw.circle(
+            screen,
+            (20, 20, 20),
+            (
+                int(player.x),
+                int(player.y)
+            ),
+            player.radius + 2,
+            2
+        )
+
+        end_x = (
+            player.x +
+            player.direction_x *
+            12
+        )
+
+        end_y = (
+            player.y +
+            player.direction_y *
+            12
+        )
+
+        pygame.draw.line(
+            screen,
+            (255, 255, 255),
+            (
+                int(player.x),
+                int(player.y)
+            ),
+            (
+                int(end_x),
+                int(end_y)
+            ),
+            2
+        )
+
+    # ======================================================
+    # JAUGE DE PUISSANCE
+    # ======================================================
+
+    def draw_power_bar(self, screen):
+
+        if self.charging_action is None:
+            return
+
+        power = self.power_system.get_power()
+
+        bar_x = 270
+        bar_y = 555
+        bar_width = 360
+        bar_height = 24
+
+        pygame.draw.rect(
+            screen,
+            (10, 15, 25),
+            (
+                bar_x,
+                bar_y,
+                bar_width,
+                bar_height
+            ),
+            border_radius=8
+        )
+
+        fill_width = int(
+            bar_width * power
+        )
+
+        if self.charging_action == "pass":
+
+            fill_color = (
+                30,
+                190,
+                255
+            )
+
+        else:
+
+            fill_color = (
+                255,
+                170,
+                40
+            )
+
+        if fill_width > 0:
+
+            pygame.draw.rect(
+                screen,
+                fill_color,
+                (
+                    bar_x,
+                    bar_y,
+                    fill_width,
+                    bar_height
+                ),
+                border_radius=8
+            )
+
+        pygame.draw.rect(
+            screen,
+            (235, 235, 235),
+            (
+                bar_x,
+                bar_y,
+                bar_width,
+                bar_height
+            ),
+            2,
+            border_radius=8
+        )
+
+        for mark in (
+            0.25,
+            0.50,
+            0.75
+        ):
+
+            x = int(
+                bar_x +
+                bar_width * mark
+            )
+
+            pygame.draw.line(
+                screen,
+                (200, 200, 200),
+                (
+                    x,
+                    bar_y
+                ),
+                (
+                    x,
+                    bar_y + bar_height
+                ),
+                1
+            )
+
+    # ======================================================
+    # AFFICHAGE
+    # ======================================================
+
+    def draw(self, screen):
+
+        screen.fill(
+            (8, 100, 45)
+        )
+
+        # --------------------------------------------------
+        # TERRAIN
+        # --------------------------------------------------
+
+        pygame.draw.rect(
+            screen,
+            (235, 235, 235),
+            self.field,
+            4
+        )
+
+        pygame.draw.line(
+            screen,
+            (235, 235, 235),
+            (
+                self.field.centerx,
+                self.field.top
+            ),
+            (
+                self.field.centerx,
+                self.field.bottom
+            ),
+            3
+        )
+
+        pygame.draw.circle(
+            screen,
+            (235, 235, 235),
+            self.field.center,
+            70,
+            3
+        )
+
+        # --------------------------------------------------
+        # SURFACES
+        # --------------------------------------------------
+
+        pygame.draw.rect(
+            screen,
+            (235, 235, 235),
+            (
+                self.field.left,
+                self.field.centery - 100,
+                120,
+                200
+            ),
+            3
+        )
+
+        pygame.draw.rect(
+            screen,
+            (235, 235, 235),
+            (
+                self.field.right - 120,
+                self.field.centery - 100,
+                120,
+                200
+            ),
+            3
+        )
+
+        pygame.draw.rect(
+            screen,
+            (235, 235, 235),
+            (
+                self.field.left,
+                self.field.centery - 55,
+                55,
+                110
+            ),
+            3
+        )
+
+        pygame.draw.rect(
+            screen,
+            (235, 235, 235),
+            (
+                self.field.right - 55,
+                self.field.centery - 55,
+                55,
+                110
+            ),
+            3
+        )
+
+        # --------------------------------------------------
+        # JOUEURS
+        # --------------------------------------------------
+
+        for player in self.home_players:
+
+            if not getattr(
+                player,
+                "on_pitch",
+                True
+            ):
+                continue
+
+            if player.number == 1:
+
+                self.draw_goalkeeper(
+                    screen,
+                    player
+                )
+
+            else:
+
+                player.draw(screen)
+
+        for player in self.away_players:
+
+            if not getattr(
+                player,
+                "on_pitch",
+                True
+            ):
+                continue
+
+            if player.number == 1:
+
+                self.draw_goalkeeper(
+                    screen,
+                    player
+                )
+
+            else:
+
+                player.draw(screen)
+
+        # --------------------------------------------------
+        # SELECTION
+        # --------------------------------------------------
+
+        selected = self.get_selected_player()
+
+        if selected is not None:
+
+            pygame.draw.circle(
+                screen,
+                (255, 230, 60),
+                (
+                    int(selected.x),
+                    int(selected.y)
+                ),
+                selected.radius + 6,
+                3
+            )
+
+        # --------------------------------------------------
+        # BALLON
+        # --------------------------------------------------
+
+        pygame.draw.circle(
+            screen,
+            (250, 250, 250),
+            (
+                int(self.ball_x),
+                int(self.ball_y)
+            ),
+            7
+        )
+
+        pygame.draw.circle(
+            screen,
+            (20, 20, 20),
+            (
+                int(self.ball_x),
+                int(self.ball_y)
+            ),
+            7,
+            2
+        )
+
+        # --------------------------------------------------
+        # SCORE
+        # --------------------------------------------------
+
+        pygame.draw.rect(
+            screen,
+            (5, 15, 25),
+            (
+                340,
+                10,
+                220,
+                45
+            ),
+            border_radius=10
+        )
+
+        for i in range(
+            min(self.home_score, 5)
+        ):
+
+            pygame.draw.circle(
+                screen,
+                (30, 130, 240),
+                (
+                    365 + i * 25,
+                    32
+                ),
+                6
+            )
+
+        for i in range(
+            min(self.away_score, 5)
+        ):
+
+            pygame.draw.circle(
+                screen,
+                (220, 60, 70),
+                (
+                    455 + i * 25,
+                    32
+                ),
+                6
+            )
+
+        # --------------------------------------------------
+        # PUISSANCE
+        # --------------------------------------------------
+
+        self.draw_power_bar(screen)
