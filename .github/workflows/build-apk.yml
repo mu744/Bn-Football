@@ -11,57 +11,44 @@ jobs:
       - name: Télécharger le projet
         uses: actions/checkout@v4
 
-      - name: Installer Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
       - name: Installer Java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
 
-      - name: Installer les dépendances système
+      - name: Vérifier Android SDK
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            git \
-            zip \
-            unzip \
-            autoconf \
-            automake \
-            libtool \
-            pkg-config \
-            zlib1g-dev \
-            libncurses5-dev \
-            libncursesw5-dev \
-            cmake \
-            ninja-build \
-            libffi-dev
-
-      - name: Installer Android SDK
-        uses: android-actions/setup-android@v3
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          which sdkmanager || true
+          sdkmanager --version || true
 
       - name: Installer Android API et NDK
         run: |
+          yes | sdkmanager --licenses || true
           sdkmanager "platform-tools"
           sdkmanager "platforms;android-35"
           sdkmanager "build-tools;35.0.0"
           sdkmanager "ndk;28.0.13004108"
-          yes | sdkmanager --licenses || true
+
+      - name: Préparer Android
+        run: |
+          echo "ANDROIDSDK=$ANDROID_SDK_ROOT" >> "$GITHUB_ENV"
+          echo "ANDROID_HOME=$ANDROID_SDK_ROOT" >> "$GITHUB_ENV"
+          echo "ANDROIDNDK=$ANDROID_SDK_ROOT/ndk/28.0.13004108" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/28.0.13004108" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_ROOT=$ANDROID_SDK_ROOT/ndk/28.0.13004108" >> "$GITHUB_ENV"
+
+      - name: Installer Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
 
       - name: Installer Python-for-Android
         run: |
           python -m pip install --upgrade pip setuptools wheel
           python -m pip install python-for-android==2026.5.9
-
-      - name: Préparer les variables Android
-        run: |
-          echo "ANDROIDSDK=$ANDROID_SDK_ROOT" >> $GITHUB_ENV
-          echo "ANDROID_HOME=$ANDROID_SDK_ROOT" >> $GITHUB_ENV
-          echo "ANDROIDNDK=$ANDROID_SDK_ROOT/ndk/28.0.13004108" >> $GITHUB_ENV
-          echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/28.0.13004108" >> $GITHUB_ENV
 
       - name: Construire BN-Football APK
         run: |
@@ -82,7 +69,7 @@ jobs:
         run: |
           mkdir -p output
           find . -type f -name "*.apk" -exec cp {} output/BN-Football.apk \;
-          ls -lh output/
+          ls -lh output/BN-Football.apk
 
       - name: Publier l'APK
         uses: actions/upload-artifact@v4
