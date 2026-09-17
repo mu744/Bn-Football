@@ -8,22 +8,11 @@ jobs:
     runs-on: ubuntu-22.04
     timeout-minutes: 60
 
-    env:
-      SDK_ROOT: /usr/local/lib/android/sdk
-
     steps:
-
-      # =========================================================
-      # 1 - RECUPERER LE PROJET
-      # =========================================================
 
       - name: Télécharger BN-Football
         uses: actions/checkout@v4
 
-
-      # =========================================================
-      # 2 - JAVA
-      # =========================================================
 
       - name: Installer Java 17
         uses: actions/setup-java@v4
@@ -32,19 +21,11 @@ jobs:
           java-version: "17"
 
 
-      # =========================================================
-      # 3 - PYTHON
-      # =========================================================
-
       - name: Installer Python 3.11
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-
-      # =========================================================
-      # 4 - OUTILS LINUX
-      # =========================================================
 
       - name: Installer les outils de compilation
         run: |
@@ -76,35 +57,36 @@ jobs:
             zip
 
 
-      # =========================================================
-      # 5 - CONFIGURER LE SDK
-      # =========================================================
-
       - name: Configurer Android SDK
         run: |
           set -e
 
-          test -d "$SDK_ROOT"
+          if [ -n "$ANDROID_SDK_ROOT" ] && [ -d "$ANDROID_SDK_ROOT" ]; then
+            SDK="$ANDROID_SDK_ROOT"
+          elif [ -n "$ANDROID_HOME" ] && [ -d "$ANDROID_HOME" ]; then
+            SDK="$ANDROID_HOME"
+          elif [ -d "/usr/local/lib/android/sdk" ]; then
+            SDK="/usr/local/lib/android/sdk"
+          else
+            echo "Android SDK introuvable."
+            exit 1
+          fi
 
-          echo "SDK Android : $SDK_ROOT"
+          echo "SDK utilisé : $SDK"
 
-          echo "ANDROIDSDK=$SDK_ROOT" >> "$GITHUB_ENV"
-          echo "ANDROID_HOME=$SDK_ROOT" >> "$GITHUB_ENV"
-          echo "ANDROID_SDK_ROOT=$SDK_ROOT" >> "$GITHUB_ENV"
+          echo "ANDROIDSDK=$SDK" >> "$GITHUB_ENV"
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
 
-          echo "$SDK_ROOT/platform-tools" >> "$GITHUB_PATH"
-          echo "$SDK_ROOT/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
+          echo "$SDK/platform-tools" >> "$GITHUB_PATH"
+          echo "$SDK/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
 
-
-      # =========================================================
-      # 6 - ANDROID SDK / API 35 / BUILD TOOLS / NDK
-      # =========================================================
 
       - name: Installer les composants Android
         run: |
           set -e
 
-          SDKMANAGER="$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
+          SDKMANAGER="$ANDROIDSDK/cmdline-tools/latest/bin/sdkmanager"
 
           test -x "$SDKMANAGER"
 
@@ -115,139 +97,54 @@ jobs:
           "$SDKMANAGER" "build-tools;35.0.0"
           "$SDKMANAGER" "ndk;28.2.13676358"
 
-          echo "Composants Android installés."
+          echo "SDK, API 35, Build Tools et NDK installés."
 
-
-      # =========================================================
-      # 7 - CONFIGURER NDK
-      # =========================================================
 
       - name: Configurer Android NDK
         run: |
           set -e
 
-          NDK="$SDK_ROOT/ndk/28.2.13676358"
+          NDK="$ANDROIDSDK/ndk/28.2.13676358"
 
           test -d "$NDK"
-          test -f "$NDK/source.properties"
-
-          echo "NDK : $NDK"
 
           echo "ANDROIDNDK=$NDK" >> "$GITHUB_ENV"
           echo "ANDROID_NDK_HOME=$NDK" >> "$GITHUB_ENV"
           echo "ANDROID_NDK_ROOT=$NDK" >> "$GITHUB_ENV"
 
+          echo "NDK utilisé : $NDK"
 
-      # =========================================================
-      # 8 - VERIFICATION SANS PIPE
-      # =========================================================
 
-      - name: Vérifier la configuration
+      - name: Vérifier la chaîne de compilation
         run: |
           set -e
 
-          echo "=========================================="
-          echo "BN-FOOTBALL - VERIFICATION ENVIRONNEMENT"
-          echo "=========================================="
-
-          echo ""
-          echo "JAVA"
           java -version
-
-          echo ""
-          echo "PYTHON"
           python --version
-
-          echo ""
-          echo "AUTOCONF"
           autoconf --version
-
-          echo ""
-          echo "AUTOMAKE"
           automake --version
-
-          echo ""
-          echo "LIBTOOL"
           libtool --version
-
-          echo ""
-          echo "CMAKE"
           cmake --version
-
-          echo ""
-          echo "NINJA"
           ninja --version
 
-          echo ""
-          echo "SDK"
           test -d "$ANDROIDSDK/platforms/android-35"
-          echo "Android API 35 : OK"
-
-          echo ""
-          echo "BUILD TOOLS"
           test -d "$ANDROIDSDK/build-tools/35.0.0"
-          echo "Build Tools 35.0.0 : OK"
-
-          echo ""
-          echo "NDK"
           test -d "$ANDROIDNDK"
-          echo "NDK r28c : OK"
 
-          echo ""
-          echo "=========================================="
-          echo "ENVIRONNEMENT PRET POUR P4A"
-          echo "=========================================="
+          echo "Chaîne de compilation prête."
 
-
-      # =========================================================
-      # 9 - INSTALLER P4A
-      # =========================================================
 
       - name: Installer Python-for-Android
         run: |
           set -e
 
-          python -m pip install --upgrade \
-            pip \
-            setuptools \
-            wheel
+          python -m pip install --upgrade pip setuptools wheel
 
           python -m pip install \
             python-for-android==2026.05.09
 
           p4a --version
 
-
-      # =========================================================
-      # 10 - VERIFIER LE PROJET
-      # =========================================================
-
-      - name: Vérifier le projet BN-Football
-        run: |
-          set -e
-
-          test -f main.py
-          test -d core
-          test -d football
-          test -d screens
-          test -d controls
-          test -d data
-          test -d assets
-
-          echo "main.py : OK"
-          echo "core/ : OK"
-          echo "football/ : OK"
-          echo "screens/ : OK"
-          echo "controls/ : OK"
-          echo "data/ : OK"
-          echo "assets/ : OK"
-
-          echo "Projet BN-Football prêt."
-
-
-      # =========================================================
-      # 11 - CONSTRUCTION
-      # =========================================================
 
       - name: Construire BN-Football APK
         run: |
@@ -269,10 +166,6 @@ jobs:
             --debug
 
 
-      # =========================================================
-      # 12 - TROUVER L'APK
-      # =========================================================
-
       - name: Préparer BN-Football.apk
         run: |
           set -e
@@ -287,7 +180,7 @@ jobs:
           done < <(find . -type f -name "*.apk")
 
           if [ -z "$APK" ]; then
-            echo "ERREUR : aucun APK n'a été généré."
+            echo "Aucun APK généré."
             exit 1
           fi
 
@@ -299,10 +192,6 @@ jobs:
 
           ls -lh output/BN-Football.apk
 
-
-      # =========================================================
-      # 13 - PUBLIER L'APK
-      # =========================================================
 
       - name: Publier BN-Football APK
         uses: actions/upload-artifact@v4
