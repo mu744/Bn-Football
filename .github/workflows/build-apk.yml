@@ -5,14 +5,9 @@ on:
 
 jobs:
   build-apk:
-    runs-on: ubuntu-24.04
-
-    env:
-      SDK_ROOT: /usr/local/lib/android/sdk
-      NDK_ROOT: /usr/local/lib/android/sdk/ndk/28.2.13676358
+    runs-on: ubuntu-22.04
 
     steps:
-
       - name: Télécharger le projet
         uses: actions/checkout@v4
 
@@ -27,60 +22,99 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Configurer Android SDK et NDK
+      - name: Installer les dépendances Linux p4a
         run: |
-          echo "ANDROIDSDK=$SDK_ROOT" >> "$GITHUB_ENV"
-          echo "ANDROID_HOME=$SDK_ROOT" >> "$GITHUB_ENV"
-          echo "ANDROID_SDK_ROOT=$SDK_ROOT" >> "$GITHUB_ENV"
+          sudo apt-get update
+          sudo apt-get install -y \
+            autoconf \
+            automake \
+            autopoint \
+            libtool \
+            libltdl-dev \
+            libffi-dev \
+            libssl-dev \
+            pkg-config \
+            cmake \
+            ninja-build \
+            make \
+            gcc \
+            g++ \
+            git \
+            patch \
+            unzip \
+            zip \
+            wget \
+            lbzip2 \
+            ccache
 
-          echo "ANDROIDNDK=$NDK_ROOT" >> "$GITHUB_ENV"
-          echo "ANDROID_NDK_HOME=$NDK_ROOT" >> "$GITHUB_ENV"
-          echo "ANDROID_NDK_ROOT=$NDK_ROOT" >> "$GITHUB_ENV"
-
-          echo "$SDK_ROOT/platform-tools" >> "$GITHUB_PATH"
-          echo "$SDK_ROOT/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
-          echo "$SDK_ROOT/build-tools/35.0.0" >> "$GITHUB_PATH"
-
-      - name: Vérifier toute la configuration Android
+      - name: Configurer Android SDK
         run: |
-          echo "===== SDK ====="
-          test -d "$SDK_ROOT"
-          echo "SDK OK"
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
+          echo "ANDROID_HOME=$ANDROID_HOME"
 
-          echo "===== API 35 ====="
-          test -d "$SDK_ROOT/platforms/android-35"
-          echo "API 35 OK"
+          test -d "$ANDROID_SDK_ROOT"
 
-          echo "===== BUILD TOOLS ====="
-          test -d "$SDK_ROOT/build-tools/35.0.0"
-          echo "Build-tools 35.0.0 OK"
+          echo "$ANDROID_SDK_ROOT/platform-tools" >> "$GITHUB_PATH"
+          echo "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
 
-          echo "===== NDK ====="
-          test -d "$NDK_ROOT"
-          echo "NDK OK"
+      - name: Détecter le NDK
+        run: |
+          SDK="$ANDROID_SDK_ROOT"
 
+          echo "NDK disponibles :"
+          find "$SDK/ndk" -mindepth 1 -maxdepth 1 -type d | sort -V
+
+          NDK=$(find "$SDK/ndk" \
+            -mindepth 1 \
+            -maxdepth 1 \
+            -type d \
+            -name "28.*" \
+            | sort -V \
+            | tail -n 1)
+
+          test -n "$NDK"
+          test -d "$NDK"
+
+          echo "NDK sélectionné : $NDK"
+
+          echo "ANDROIDSDK=$SDK" >> "$GITHUB_ENV"
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+          echo "ANDROIDNDK=$NDK" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_HOME=$NDK" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_ROOT=$NDK" >> "$GITHUB_ENV"
+
+      - name: Vérifier la chaîne de compilation
+        run: |
           echo "===== JAVA ====="
           java -version
 
           echo "===== PYTHON ====="
           python --version
 
-          echo "===== CMAKE ====="
-          cmake --version
+          echo "===== AUTOCONF ====="
+          autoconf --version | head -n 1
 
-          echo "===== SDKMANAGER ====="
-          "$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --version
+          echo "===== LIBTOOL ====="
+          libtool --version | head -n 1
+
+          echo "===== CMAKE ====="
+          cmake --version | head -n 1
+
+          echo "===== SDK ====="
+          test -d "$ANDROIDSDK/platforms/android-35"
+
+          echo "===== BUILD TOOLS ====="
+          test -d "$ANDROIDSDK/build-tools/35.0.0"
+
+          echo "===== NDK ====="
+          test -d "$ANDROIDNDK"
+
+          echo "CONFIGURATION ANDROID OK"
 
       - name: Installer Python-for-Android
         run: |
           python -m pip install --upgrade pip setuptools wheel
           python -m pip install python-for-android==2026.05.09
-
-      - name: Nettoyer les anciens builds
-        run: |
-          rm -rf .p4a
-          rm -rf ~/.local/share/python-for-android
-          rm -rf ~/.cache/python-for-android
 
       - name: Construire BN-Football APK
         run: |
@@ -94,21 +128,28 @@ jobs:
             --arch=arm64-v8a \
             --android-api=35 \
             --ndk-api=26 \
-            --ndk-dir="$NDK_ROOT" \
-            --sdk-dir="$SDK_ROOT" \
+            --ndk-dir="$ANDROIDNDK" \
+            --sdk-dir="$ANDROIDSDK" \
             --orientation=landscape \
             --debug
 
-      - name: Chercher l'APK
+      - name: Vérifier et préparer APK
         run: |
           mkdir -p output
+
+          echo "Recherche de l'APK..."
           find . -type f -name "*.apk" -print
+
           APK=$(find . -type f -name "*.apk" | head -n 1)
+
           test -n "$APK"
+
           cp "$APK" output/BN-Football.apk
+
+          echo "APK FINAL :"
           ls -lh output/BN-Football.apk
 
-      - name: Publier l'APK
+      - name: Publier BN-Football APK
         uses: actions/upload-artifact@v4
         with:
           name: BN-Football-APK
